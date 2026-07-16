@@ -73,7 +73,9 @@ jobs:
       # Revoke the CodeRabbit gate label BEFORE scanning, so CodeRabbit never
       # reviews content that hasn't been re-scanned.
       - name: Revoke CodeRabbit gate label
-        if: ${{ inputs.manage-coderabbit-label && github.event_name == 'pull_request' }}
+        # Same-repo PRs only — fork PRs get a read-only token here (the POST/DELETE
+        # would 403 and fail the job). The fork-label-companion.yml handles them.
+        if: ${{ inputs.manage-coderabbit-label && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           curl -sf -X DELETE \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -100,7 +102,9 @@ jobs:
       # Clean or waived — apply the label so CodeRabbit's positive label match
       # triggers its review of the now-cleared content.
       - name: Grant CodeRabbit gate label
-        if: ${{ inputs.manage-coderabbit-label && github.event_name == 'pull_request' }}
+        # Same-repo PRs only — fork PRs get a read-only token here (the POST/DELETE
+        # would 403 and fail the job). The fork-label-companion.yml handles them.
+        if: ${{ inputs.manage-coderabbit-label && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           curl -sf -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \

@@ -1,0 +1,61 @@
+# Fork-safe CodeRabbit gate label (companion to the reusable scan).
+# Copy to .github/workflows/miasma-label.yml in each repo that uses the
+# CodeRabbit label gate (manage-coderabbit-label: true).
+#
+# On a fork PR the scan job's token is read-only, so it can't add/remove the
+# miasma-clean gate label — the scan skips those steps (see reusable-scan.yml's
+# same-repo guard). This workflow_run companion runs afterward with a write
+# token and sets the label from the scan's CONCLUSION, WITHOUT checking out or
+# executing any fork code:
+#
+#   success (clean, or /miasma-approve-waived) -> add miasma-clean   (CodeRabbit reviews)
+#   failure (blocked)                          -> remove miasma-clean
+#
+# Same-repo PRs are already labeled directly by the scan, so this is gated to
+# fork PRs only — no double handling. Do NOT use pull_request_target.
+
+name: miasma-label
+
+on:
+  workflow_run:
+    workflows: ["miasma-detect"]   # MUST match the scan workflow's `name:`
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    # Fork PRs only.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name
+    env:
+      GH_TOKEN: ${{ github.token }}
+      API: ${{ github.api_url }}/repos/${{ github.repository }}
+      GATE_LABEL: miasma-clean
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+    steps:
+      - name: Apply gate label from scan verdict
+        run: |
+          # workflow_run.pull_requests[] is empty for fork PRs — resolve the PR
+          # number from the head SHA instead.
+          PR=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 "$API/commits/$SHA/pulls" \
+               | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const a=JSON.parse(d);process.stdout.write(a[0]?String(a[0].number):'')})")
+          if [ -z "$PR" ]; then echo "no open PR for $SHA — nothing to label"; exit 0; fi
+          if [ "$CONCLUSION" = "success" ]; then
+            echo "scan passed -> granting $GATE_LABEL on #$PR"
+            curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -d "{\"labels\":[\"$GATE_LABEL\"]}" "$API/issues/$PR/labels"
+          else
+            echo "scan blocked -> removing $GATE_LABEL on #$PR"
+            curl -sf -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$API/issues/$PR/labels/$GATE_LABEL" || true   # 404 when absent — fine
+          fi
